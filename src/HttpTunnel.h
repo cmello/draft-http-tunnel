@@ -4,6 +4,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <cstdlib>
 #include <asio/awaitable.hpp>
@@ -28,21 +29,21 @@ namespace http_tunnel {
     using namespace std;
 
     /**
-     * Splits a string using the specified delimiter.
-     */
-    vector<string> split_string(const string& input, const string& delimiter) {
-        vector<string> result;
+    * Splits a string using the specified delimiter, returns string_views.
+    */
+    vector<string_view> split_string(const string_view& input, const string& delimiter) {
+        vector<string_view> result;
 
         size_t last = 0;
         size_t next;
 
         while ((next = input.find(delimiter, last)) != string::npos) {
-            result.push_back(input.substr(last, next - last));
+            result.emplace_back(&input[last], next - last);
             last = next + delimiter.size();
         }
 
         if (last < input.size()) {
-            result.push_back(input.substr(last));
+            result.emplace_back(&input[last], input.size() - last);
         }
 
         return result;
@@ -63,14 +64,12 @@ namespace http_tunnel {
     class HttpConnectRequest {
     public:
         static HttpConnectRequest FromRequestString(const string& request_string) {
-            vector<string> request_lines = split_string(request_string, "\r\n");
-            cout << "number of lines: " << request_lines.size() << endl;
-
+            vector<string_view> request_lines = split_string(request_string, "\r\n");
             if (request_lines.empty()) {
                 throw InvalidHttpConnectRequest();
             }
 
-            vector<string> connect_parameters = split_string(request_lines[0], " ");
+            vector<string_view> connect_parameters = split_string(request_lines[0], " ");
             if (connect_parameters.size() < 3) { // [0] = CONNECT, [1] = host:port, [2] = HTTP/1.1
                 throw InvalidHttpConnectRequest();
             }
@@ -79,12 +78,12 @@ namespace http_tunnel {
                 throw UnsupportedHttpVerb();
             }
 
-            vector<string> target = split_string(connect_parameters[1], ":");
+            vector<string_view> target = split_string(connect_parameters[1], ":");
             const string DEFAULT_PORT = "80";
             if (target.size() == 1) {
-                return HttpConnectRequest(target[0], DEFAULT_PORT);
+                return HttpConnectRequest(string(target[0]), DEFAULT_PORT);
             } else {
-                return HttpConnectRequest(target[0], target[1]);
+                return HttpConnectRequest(string(target[0]), string(target[1]));
             }
         }
 
@@ -114,7 +113,6 @@ namespace http_tunnel {
                   _io_context(io_context),
                   _target_socket(io_context),
                   _resolver(io_context) {
-            cout << "Constructing tunnel" << endl;
         }
 
         void start() {
@@ -126,54 +124,65 @@ namespace http_tunnel {
 
     private:
         awaitable<void> process_request() {
-            string request_string;
-            std::size_t n = co_await asio::async_read_until(_accepting_socket,
-                                                            asio::dynamic_buffer(request_string, 1024), "\r\n",
-                                                            use_awaitable);
-            auto request = HttpConnectRequest::FromRequestString(request_string);
-            // send reply
-            string response = "HTTP/1.1 200 OK\r\n\r\n";
-            co_await _accepting_socket.async_send(asio::buffer(response), use_awaitable);
+            try {
+                string request_string;
+                std::size_t n = co_await asio::async_read_until(_accepting_socket,
+                                                                asio::dynamic_buffer(request_string, 1024), "\r\n",
+                                                                use_awaitable);
+                auto request = HttpConnectRequest::FromRequestString(request_string);
+                // send reply
+                string response = "HTTP/1.1 200 OK\r\n\r\n";
+                co_await _accepting_socket.async_send(asio::buffer(response), use_awaitable);
 
-            cout << "Connecting to host " << request.GetHost() << ", port " << request.GetPort() << endl;
-            auto endpoints = co_await _resolver.async_resolve(request.GetHost(), request.GetPort(), use_awaitable);
-            assert(endpoints.size() >= 1);
+                cout << "Connecting to host " << request.GetHost() << ", port " << request.GetPort() << endl;
+                auto endpoints = co_await _resolver.async_resolve(request.GetHost(), request.GetPort(), use_awaitable);
+                assert(endpoints.size() >= 1);
 
-            co_await _target_socket.async_connect(*endpoints.begin(), use_awaitable);
-            cout << "connected!" << endl;
-            co_spawn(_io_context,
-                     [self = shared_from_this()] { return self->relay_read(); },
-                     detached);
-            co_spawn(_io_context,
-                     [self = shared_from_this()] { return self->relay_write(); },
-                     detached);
-
+                co_await _target_socket.async_connect(*endpoints.begin(), use_awaitable);
+                cout << "target native handle: " << _target_socket.native_handle() << endl;
+                cout << "connected!" << endl;
+                co_spawn(_io_context,
+                         [self = shared_from_this()] { return self->relay_read(); },
+                         detached);
+                co_spawn(_io_context,
+                         [self = shared_from_this()] { return self->relay_write(); },
+                         detached);
+            } catch (exception& ex) {
+                cout << "process_requests exception: " << ex.what() << endl;
+            }
         }
 
         awaitable<void> relay_read() {
-            char data[16 * 1024];
-            while (true) {
-                //cout << "reading from source..." << endl;
-                std::size_t n = co_await _accepting_socket.async_read_some(asio::buffer(data, sizeof(data)),
-                                                                           use_awaitable);
-                //cout << "read " << n << " bytes from source. writing to target..." << endl;
+            char data[1024 * 1024];
+            try {
+                while (true) {
+                    std::size_t n = co_await _accepting_socket.async_read_some(asio::buffer(data, sizeof(data)),
+                                                                               use_awaitable);
+                    cout << "read " << n << " bytes from source. writing to target..." << endl;
 
-                n = co_await _target_socket.async_write_some(asio::buffer(data, n), use_awaitable);
-                //cout << "wrote " << n << " bytes to target" << endl;
+                    n = co_await _target_socket.async_write_some(asio::buffer(data, n), use_awaitable);
+                    cout << "wrote " << n << " bytes to target" << endl;
+                }
+            } catch (exception& ex) {
+                cout << "relay_read exception: " << ex.what() << endl;
             }
         }
 
         awaitable<void> relay_write() {
-            char data[16 * 1024];
-            while (true) {
-                //cout << "reading from target..." << endl;
-                std::size_t n = co_await _target_socket.async_read_some(asio::buffer(data, sizeof(data)),
-                                                                        use_awaitable);
+            char data[1024 * 1024];
+            try {
 
-                //cout << "read " << n << " bytes from target. writing to source..." << endl;
+                while (true) {
+                    cout << "reading from target..." << endl;
+                    std::size_t n = co_await _target_socket.async_read_some(asio::buffer(data, sizeof(data)),
+                                                                            use_awaitable);
+                    cout << "read " << n << " bytes from target. writing to source..." << endl;
 
-                co_await _accepting_socket.async_write_some(asio::buffer(data, n), use_awaitable);
-                //cout << "wrote " << n << " bytes to source" << endl;
+                    co_await _accepting_socket.async_write_some(asio::buffer(data, n), use_awaitable);
+                    cout << "wrote " << n << " bytes to source" << endl;
+                }
+            } catch (exception& ex) {
+                cout << "relay_write exception: " << ex.what() << endl;
             }
         }
 

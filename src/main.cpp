@@ -3,6 +3,7 @@
 #include <string>
 #include <utility>
 #include <cstdlib>
+#include <thread>
 #include <asio/awaitable.hpp>
 #include <asio/detached.hpp>
 #include <asio/co_spawn.hpp>
@@ -49,7 +50,14 @@ int main() {
         signals.async_wait([&](auto, auto) { io_context.stop(); });
 
         //asio::executor_work_guard executor_word_guard(io_context);
-        io_context.run();
+        vector<thread> threads;
+        for (int i = 0; i < thread::hardware_concurrency(); i++) {
+            threads.emplace_back([&io_context] { io_context.run(); });
+        }
+
+        for (auto& thread : threads) {
+            thread.join();
+        }
     } catch (exception& e) {
         cout << "unhandled exception: " << e.what() << endl;
         return -1;
