@@ -33,7 +33,7 @@ using namespace http_tunnel;
 awaitable<void> listener(tcp::acceptor acceptor, asio::io_context& io_context)
 {
     while (true) {
-        cout << "waiting connection..." << endl;
+        //cout << "waiting connection..." << endl;
         make_shared<HttpTunnel>(co_await acceptor.async_accept(use_awaitable), io_context)->start();
     }
 }
@@ -54,6 +54,7 @@ int main() {
         for (int i = 0; i < thread::hardware_concurrency(); i++) {
             threads.emplace_back([&io_context] { io_context.run(); });
         }
+        cout << "Started " << threads.size() << " threads" << endl;
 
         for (auto& thread : threads) {
             thread.join();
