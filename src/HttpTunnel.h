@@ -53,9 +53,15 @@ namespace http_tunnel {
      * HttpConnect parse exceptions
      */
     class InvalidHttpConnectRequest : public std::exception {
+        const char* what() const noexcept override {
+            return "InvalidHttpConnectRequest";
+        }
     };
 
     class UnsupportedHttpVerb : public InvalidHttpConnectRequest {
+        const char* what() const noexcept override {
+            return "UnsupportedVerb";
+        }
     };
 
     /**
@@ -116,13 +122,14 @@ namespace http_tunnel {
         }
 
         void start() {
-            //cout << "Starting tunnel" << endl;
             co_spawn(_accepting_socket.get_executor(),
                      [self = shared_from_this()] { return self->process_request(); },
                      detached);
         }
 
     private:
+        const size_t BUFFER_SIZE = 64 * 1024;
+
         awaitable<void> process_request() {
             try {
                 string request_string;
@@ -132,15 +139,13 @@ namespace http_tunnel {
                 auto request = HttpConnectRequest::FromRequestString(request_string);
                 // send reply
                 string response = "HTTP/1.1 200 OK\r\n\r\n";
-                co_await _accepting_socket.async_send(asio::buffer(response), use_awaitable);
+                co_await asio::async_write(_accepting_socket, asio::buffer(response), use_awaitable);
 
                 //cout << "Connecting to host " << request.GetHost() << ", port " << request.GetPort() << endl;
                 auto endpoints = co_await _resolver.async_resolve(request.GetHost(), request.GetPort(), use_awaitable);
                 assert(endpoints.size() >= 1);
 
                 co_await _target_socket.async_connect(*endpoints.begin(), use_awaitable);
-                //cout << "target native handle: " << _target_socket.native_handle() << endl;
-                //cout << "connected!" << endl;
                 co_spawn(_io_context,
                          [self = shared_from_this()] { return self->relay_read(); },
                          detached);
@@ -153,31 +158,46 @@ namespace http_tunnel {
         }
 
         awaitable<void> relay_read() {
-            char data[1024 * 1024];
+            char* buffer = new char[BUFFER_SIZE];
             try {
                 while (true) {
-                    std::size_t n = co_await _accepting_socket.async_read_some(asio::buffer(data, sizeof(data)), use_awaitable);
-                    co_await asio::async_write(_target_socket, asio::buffer(data, n), use_awaitable);
+                    std::size_t n = co_await _accepting_socket.async_read_some(asio::buffer(buffer, sizeof(buffer)), use_awaitable);
+                    co_await asio::async_write(_target_socket, asio::buffer(buffer, n), use_awaitable);
                 }
             } catch (exception& ex) {
-                //cout << "ERROR: relay_read exception: " << ex.what() << endl;
-                _accepting_socket.close();
-                _target_socket.close();
             }
+
+            shutdown_sockets();
+            delete[] buffer;
         }
 
         awaitable<void> relay_write() {
-            char data[1024 * 1024];
+            char* buffer = new char[BUFFER_SIZE];
             try {
                 while (true) {
-                    std::size_t n = co_await _target_socket.async_read_some(asio::buffer(data, sizeof(data)), use_awaitable);
-                    co_await asio::async_write(_accepting_socket, asio::buffer(data, n), use_awaitable);
+                    std::size_t n = co_await _target_socket.async_read_some(asio::buffer(buffer, sizeof(buffer)), use_awaitable);
+                    co_await asio::async_write(_accepting_socket, asio::buffer(buffer, n), use_awaitable);
                 }
             } catch (exception& ex) {
-                //cout << "ERROR: relay_write exception: " << ex.what() << endl;
-                _accepting_socket.close();
-                _target_socket.close();
             }
+
+            shutdown_sockets();
+            delete[] buffer;
+        }
+
+        void shutdown_sockets() {
+            try {
+                _accepting_socket.shutdown(asio::socket_base::shutdown_both);
+            } catch(...) { }
+            try {
+                _accepting_socket.close();
+            } catch(...) { }
+            try {
+                _target_socket.shutdown(asio::socket_base::shutdown_both);
+            } catch(...) { }
+            try {
+                _target_socket.close();
+            } catch(...) { }
         }
 
     private:

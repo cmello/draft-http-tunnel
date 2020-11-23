@@ -15,7 +15,7 @@
 #include <asio/steady_timer.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
-
+#include <sstream>
 #include "HttpTunnel.h"
 
 using asio::ip::tcp;
@@ -30,37 +30,107 @@ using namespace http_tunnel;
 /**
  * TCP listener
  */
-awaitable<void> listener(tcp::acceptor acceptor, asio::io_context& io_context)
+awaitable<void> listener(tcp::acceptor& acceptor, asio::io_context& io_context)
 {
     while (true) {
-        //cout << "waiting connection..." << endl;
-        make_shared<HttpTunnel>(co_await acceptor.async_accept(use_awaitable), io_context)->start();
+        try {
+            make_shared<HttpTunnel>(co_await acceptor.async_accept(use_awaitable), io_context)->start();
+        } catch (exception& ex) {
+            cout << "Error accepting more connections. Details: " << ex.what() << endl;
+            this_thread::sleep_for(1s);
+        }
     }
 }
 
-int main() {
+class InvalidCommandLineException : public std::exception {
+    const char* what() const noexcept override {
+        return "Invalid command-line parameters";
+    }
+};
+
+class Configuration {
+
+public:
+    static void print_help_and_quit() {
+        cout << "usage: draft_http_tunnel [OPTIONS] --bind <BIND>" << endl;
+        cout << "example: draft_http_tunnel --bind 0.0.0.0:8888" << endl;
+        throw InvalidCommandLineException();
+    }
+
+    static Configuration from_command_line(int argc, char** argv) {
+        auto args = get_args_from_main(argc, argv);
+        if (args.size() < 3) {
+            print_help_and_quit();
+        }
+
+        auto iBindParameter = find(args.begin(), args.end(), "--bind");
+        if (iBindParameter == args.end()) {
+            print_help_and_quit();
+        }
+
+        iBindParameter++;
+        if (iBindParameter == args.end()) {
+            // --bind is the last parameter, missing bind value
+            print_help_and_quit();
+        }
+
+        string bind_param_value = *iBindParameter;
+        auto bind_parts = split_string(bind_param_value, ":");
+        if (bind_parts.size() != 2) {
+            cout << "Value specified for --bind is invalid: " << bind_param_value << ". valid example: 0.0.0.0:8080" << endl;
+            print_help_and_quit();
+        }
+
+        unsigned short port = 8080;
+        istringstream is(string { bind_parts[1] });
+        is >> port;
+
+        return Configuration(port);
+    }
+
+    unsigned short GetPort() const {
+        return _port;
+    }
+
+private:
+    static vector<string> get_args_from_main(int argc, char** argv) {
+        vector<string> args;
+        for (int i = 0; i < argc; i++) {
+            args.push_back(argv[i]);
+        }
+        return args;
+    }
+
+    Configuration() = delete;
+    Configuration(unsigned short port) : _port(port) {
+
+    }
+
+    int _port;
+};
+
+int main(int argc, char** argv) {
 
     try {
+        auto port = Configuration::from_command_line(argc, argv).GetPort();
+        cout << "Bind port: " << port << endl;
+
         asio::io_context io_context;
-
-        const int port = 8080;
-        co_spawn(io_context, listener(tcp::acceptor(io_context, {tcp::v4(), port}), io_context), detached);
-
         asio::signal_set signals(io_context, SIGINT, SIGTERM);
         signals.async_wait([&](auto, auto) { io_context.stop(); });
 
-        //asio::executor_work_guard executor_word_guard(io_context);
-        vector<thread> threads;
-        for (int i = 0; i < thread::hardware_concurrency(); i++) {
-            threads.emplace_back([&io_context] { io_context.run(); });
-        }
-        cout << "Started " << threads.size() << " threads" << endl;
+        tcp::acceptor acceptor (io_context, {tcp::v4(), port});
+        acceptor.set_option(asio::ip::tcp::acceptor::reuse_address(true));
 
-        for (auto& thread : threads) {
-            thread.join();
+        co_spawn(io_context, listener(acceptor, io_context), detached);
+
+        try {
+            io_context.run();
+        } catch (exception& ex) {
+            cout << "io_context exception: " << endl;
         }
     } catch (exception& e) {
-        cout << "unhandled exception: " << e.what() << endl;
+        cout << endl << "Unhandled exception: " << e.what() << endl;
         return -1;
     }
 
