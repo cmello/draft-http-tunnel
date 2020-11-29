@@ -18,6 +18,7 @@
 #include <asio/steady_timer.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
+#include <asio/strand.hpp>
 
 namespace http_tunnel {
     using asio::ip::tcp;
@@ -118,17 +119,22 @@ namespace http_tunnel {
                 : _accepting_socket(move(accepting_socket)),
                   _io_context(io_context),
                   _target_socket(io_context),
-                  _resolver(io_context) {
+                  _resolver(io_context),
+                  _no_delay(true) {
+          _accepting_socket.set_option(_no_delay);
         }
 
         void start() {
-            co_spawn(_accepting_socket.get_executor(),
+        
+            // Spawn the new coroutine using a newly created strand.
+            co_spawn(asio::make_strand(_accepting_socket.get_executor()),
                      [self = shared_from_this()] { return self->process_request(); },
                      detached);
         }
 
     private:
         const size_t BUFFER_SIZE = 64 * 1024;
+        asio::ip::tcp::no_delay _no_delay;
 
         awaitable<void> process_request() {
             try {
@@ -146,10 +152,15 @@ namespace http_tunnel {
                 assert(endpoints.size() >= 1);
 
                 co_await _target_socket.async_connect(*endpoints.begin(), use_awaitable);
-                co_spawn(_io_context,
+                _target_socket.set_option(_no_delay);
+
+                // Get a copy of the current coroutine's executor.
+                auto my_executor = co_await asio::this_coro::executor;
+                
+                co_spawn(my_executor,
                          [self = shared_from_this()] { return self->relay_read(); },
                          detached);
-                co_spawn(_io_context,
+                co_spawn(my_executor,
                          [self = shared_from_this()] { return self->relay_write(); },
                          detached);
             } catch (exception& ex) {

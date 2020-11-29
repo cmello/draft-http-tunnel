@@ -119,15 +119,25 @@ int main(int argc, char** argv) {
         asio::signal_set signals(io_context, SIGINT, SIGTERM);
         signals.async_wait([&](auto, auto) { io_context.stop(); });
 
+        vector<thread> threads;
+        for (int i = 0; i < thread::hardware_concurrency(); i++) {
+            threads.emplace_back([&io_context] {
+                try {
+                    io_context.run();
+                } catch (exception& ex) {
+                    cout << "io_context exception: " << endl;
+                }
+            });
+        }
+        cout << "Started " << threads.size() << " threads" << endl;
+        
         tcp::acceptor acceptor (io_context, {tcp::v4(), port});
         acceptor.set_option(asio::ip::tcp::acceptor::reuse_address(true));
 
         co_spawn(io_context, listener(acceptor, io_context), detached);
 
-        try {
-            io_context.run();
-        } catch (exception& ex) {
-            cout << "io_context exception: " << endl;
+        for (auto& thread : threads) {
+            thread.join();
         }
     } catch (exception& e) {
         cout << endl << "Unhandled exception: " << e.what() << endl;

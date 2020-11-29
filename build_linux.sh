@@ -1,0 +1,1 @@
+~/Programs/clang/bin/clang++ -stdlib=libc++ -nostdinc++ -I ~/Programs/clang/include/c++/v1/ -I ~/open-source/draft-http-tunnel/dependencies/asio/asio/include/ -L ~/Programs/clang/lib -lpthread   -o draft-http-tunnel -O3 ~/open-source/draft-http-tunnel/src/main.cpp  --std=c++20
