@@ -1,6 +1,6 @@
-[submodule "dependencies/asio"]
-	path = dependencies/asio
-	url = https://github.com/chriskohlhoff/asio.git
 [submodule "dependencies/googletest"]
 	path = dependencies/googletest
 	url = https://github.com/google/googletest.git
+[submodule "dependencies/trantor"]
+	path = dependencies/trantor
+	url = https://github.com/an-tao/trantor.git

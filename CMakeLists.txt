@@ -31,10 +31,13 @@ endfunction()
 
 add_subdirectory(dependencies/googletest)
 add_subdirectory(tests)
+add_subdirectory(dependencies/trantor)
 
-include_directories(dependencies/asio/asio/include)
+#include_directories(dependencies/asio/asio/include)
+include_directories(dependencies/trantor)
 
 #add_module(HttpTunnelModule src/HttpTunnel.cpp)
 add_executable(draft_http_tunnel src/main.cpp src/HttpTunnel.h)
+target_link_libraries(draft_http_tunnel trantor)
 
 #add_dependencies(draft_http_tunnel HttpTunnelModule.pcm)
