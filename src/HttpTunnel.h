@@ -123,29 +123,27 @@ namespace http_tunnel {
 
         void on_client_message_received(MsgBuffer* buffer) {
             //cout << "client message received" << endl;
-            if (!relay) {
-                if (_is_tcp_proxy) {
-                    process_request(_destination_port, _destination_host);
+            try {
+                if (!relay) {
+                    // relay is not setup yet
+                    process_request(buffer);
                     relay.store(true);
                     pending.store(true);
                 } else {
-                    string_view view(buffer->peek(), buffer->readableBytes());
-                    auto pos_end_of_request = view.find("\r\n\r\n");
-                    if (pos_end_of_request != string_view::npos) {
-                        string request_string(view.substr(0, pos_end_of_request));
-                        buffer->retrieve(pos_end_of_request + 4); // includes \r\n\r\n
-                        process_http_connect_request(request_string);
+                    // relay is setup, but target connection is still not established: ignore this message until connection is established
+                    if (_target_tcp_client == nullptr || _target_tcp_client->connection() == nullptr) {
+                        return;
                     }
+
+                    // relay is setup and target is connected: forward message
+                    //cout << "relaying from client to target..." << endl;
+                    _target_tcp_client->connection()->send(buffer->peek(), buffer->readableBytes());
+                    //cout << "client -> target: " << buffer->readableBytes() << endl;
+                    buffer->retrieveAll();
                 }
-            } else {
-                if (!_target_tcp_client || _target_tcp_client->connection() == nullptr) {
-                    pending.store(true);
-                    return;
-                }
-                //cout << "relaying from client to target..." << endl;
-                _target_tcp_client->connection()->send(buffer->peek(), buffer->readableBytes());
-                //cout << "client -> target: " << buffer->readableBytes() << endl;
-                buffer->retrieveAll();
+            } catch (exception& ex) {
+                cout << "unhandled exception. closing connection" << endl;
+                graceful_shutdown();
             }
         }
 
@@ -171,7 +169,25 @@ namespace http_tunnel {
         }
 
     private:
-        void process_http_connect_request(string request_string) {
+        void process_request(MsgBuffer* buffer) {
+            if (_is_tcp_proxy) {
+                process_tcp_proxy_request(_destination_port, _destination_host);
+            } else {
+                process_http_connect_request(buffer);
+            }
+        }
+
+        void process_http_connect_request(MsgBuffer* buffer) {
+            string_view view(buffer->peek(), buffer->readableBytes());
+            auto pos_end_of_request = view.find("\r\n\r\n");
+            if (pos_end_of_request == string_view::npos) {
+                cout << "incomplete HTTP request" << endl;
+                throw InvalidHttpConnectRequest();
+            }
+
+            string request_string(view.substr(0, pos_end_of_request));
+            buffer->retrieve(pos_end_of_request + 4); // includes \r\n\r\n
+
             _request = make_unique<HttpConnectRequest> (HttpConnectRequest::FromRequestString(request_string));
             // send reply
             string response = "HTTP/1.1 200 OK\r\n\r\n";
@@ -179,10 +195,10 @@ namespace http_tunnel {
             //cout << "Connecting to host " << _request->GetHost() << ", port " << _request->GetPort() << endl;
             auto port = atoi(_request->GetPort().c_str());
             //cout << "port number: " << port << endl;
-            process_request(port, _request->GetHost());
+            process_tcp_proxy_request(port, _request->GetHost());
         }
 
-        void process_request(unsigned int destination_port, string destination_host) {
+        void process_tcp_proxy_request(unsigned int destination_port, string destination_host) {
             try {
                 auto loop = _client_connection->getLoop();
                 auto resolver = Resolver::newResolver(loop);

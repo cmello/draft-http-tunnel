@@ -129,21 +129,6 @@ private:
     string _destination_host;
 };
 
-class Content {
-public:
-    Content() {
-        cout << "Content()" << this << endl;
-    }
-
-    Content(const Content& other) {
-        cout << "Content(Content& other)" << this  << endl;
-    }
-
-    ~Content() {
-        cout << "~Content()" << this << endl;
-    }
-};
-
 void start_server(Configuration configuration, InetAddress( addr), string server_name) {
     EventLoop loop;
     TcpServer server(&loop, addr, server_name);
