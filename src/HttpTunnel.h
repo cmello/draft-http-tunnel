@@ -172,7 +172,7 @@ namespace http_tunnel {
             char* buffer = new char[BUFFER_SIZE];
             try {
                 while (true) {
-                    std::size_t n = co_await _accepting_socket.async_read_some(asio::buffer(buffer, sizeof(buffer)), use_awaitable);
+                    std::size_t n = co_await _accepting_socket.async_read_some(asio::buffer(buffer, BUFFER_SIZE), use_awaitable);
                     co_await asio::async_write(_target_socket, asio::buffer(buffer, n), use_awaitable);
                 }
             } catch (exception& ex) {
@@ -186,7 +186,7 @@ namespace http_tunnel {
             char* buffer = new char[BUFFER_SIZE];
             try {
                 while (true) {
-                    std::size_t n = co_await _target_socket.async_read_some(asio::buffer(buffer, sizeof(buffer)), use_awaitable);
+                    std::size_t n = co_await _target_socket.async_read_some(asio::buffer(buffer, BUFFER_SIZE), use_awaitable);
                     co_await asio::async_write(_accepting_socket, asio::buffer(buffer, n), use_awaitable);
                 }
             } catch (exception& ex) {
